@@ -24,6 +24,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method !== "GET") {
       return json(res, 405, { ok: false, error: "Method not allowed" });
     }
+    
+res.setHeader("Cache-Control", "no-store");
+res.setHeader("Access-Control-Allow-Origin", "*");
+res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+if (req.method === "OPTIONS") return res.status(204).end();
 
     const insigneId = (req.query.id as string) || "";
     if (!insigneId) {
