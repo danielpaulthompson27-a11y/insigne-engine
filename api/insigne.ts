@@ -12,6 +12,7 @@ type InsigneRow = {
   id: string;
   status: string | null;
   motto_latin: string | null;
+  report_text: string | null; // ✅ added
 };
 
 function json(res: VercelResponse, status: number, body: any) {
@@ -20,16 +21,21 @@ function json(res: VercelResponse, status: number, body: any) {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // ✅ CORS + no-cache (must be before method handling)
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  // ✅ Allow preflight
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+
   try {
     if (req.method !== "GET") {
       return json(res, 405, { ok: false, error: "Method not allowed" });
     }
-    
-res.setHeader("Cache-Control", "no-store");
-res.setHeader("Access-Control-Allow-Origin", "*");
-res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-if (req.method === "OPTIONS") return res.status(204).end();
 
     const insigneId = (req.query.id as string) || "";
     if (!insigneId) {
@@ -38,9 +44,6 @@ if (req.method === "OPTIONS") return res.status(204).end();
 
     const SUPABASE_URL = process.env.SUPABASE_URL;
     const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-    // IMPORTANT: set this in Vercel (Project Settings → Environment Variables)
-    // Example bucket name: "assets" or "public" or whatever you created in Supabase Storage.
     const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || "";
 
     if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
@@ -62,10 +65,10 @@ if (req.method === "OPTIONS") return res.status(204).end();
       auth: { persistSession: false },
     });
 
-    // 1) Load the insigne
+    // 1) Load the insigne (✅ include report_text)
     const { data: insigne, error: insigneErr } = await supabase
       .from("insignes")
-      .select("id,status,motto_latin")
+      .select("id,status,motto_latin,report_text")
       .eq("id", insigneId)
       .maybeSingle<InsigneRow>();
 
@@ -91,7 +94,7 @@ if (req.method === "OPTIONS") return res.status(204).end();
 
     // 3) Create signed URLs
     const assetsWithUrls = await Promise.all(
-      (assets as AssetRow[]).map(async (a) => {
+      ((assets ?? []) as AssetRow[]).map(async (a) => {
         if (!a.storage_path) {
           return {
             asset_type: a.asset_type,
@@ -101,8 +104,6 @@ if (req.method === "OPTIONS") return res.status(204).end();
           };
         }
 
-        // storage_path should be the path *inside the bucket*
-        // Example: "insignes/test/owner-pack.pdf"
         const { data, error } = await supabase.storage
           .from(STORAGE_BUCKET)
           .createSignedUrl(a.storage_path, expiresIn);
@@ -121,9 +122,11 @@ if (req.method === "OPTIONS") return res.status(204).end();
       insigne_id: insigne.id,
       status: insigne.status,
       motto_latin: insigne.motto_latin,
+      report_text: insigne.report_text, // ✅ added
       assets: assetsWithUrls,
     });
   } catch (e: any) {
     return json(res, 500, { ok: false, error: "Unexpected error", details: e?.message ?? e });
   }
 }
+
