@@ -2,28 +2,34 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createClient } from "@supabase/supabase-js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Cache-Control", "no-store");
+
   const supabase = createClient(
     process.env.SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
     { auth: { persistSession: false } }
   );
 
-  const { data, error } = await supabase
+  const { data: insigne, error } = await supabase
     .from("insignes")
-    .select("id,status,motto_latin,report_text")
+    .select("id,status,motto_latin")
     .order("created_at", { ascending: false })
     .limit(1)
-    .single();
+    .maybeSingle();
 
-  if (error || !data) {
+  if (error || !insigne) {
     return res.status(404).json({ ok: false });
   }
 
-  return res.status(200).json({
+  const { data: assets } = await supabase
+    .from("assets")
+    .select("asset_type, storage_path")
+    .eq("insigne_id", insigne.id);
+
+  return res.json({
     ok: true,
-    insigne_id: data.id,
-    status: data.status,
-    motto_latin: data.motto_latin,
-    report_text: data.report_text,
+    insigne,
+    assets: assets ?? []
   });
 }
