@@ -26,20 +26,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           catch { return null; }
         })();
 
-  // 🔑 Tally sends submission ID in different places depending on context
-  const submissionId =
-    body?.submission?.id ||
-    body?.data?.submission?.id ||
-    body?.event?.data?.id ||
-    body?.data?.id ||
-    body?.id;
+  // Collect candidates (Tally varies by event type)
+  const candidates = [
+    body?.submission?.id,
+    body?.data?.submission?.id,
+    body?.event?.data?.id,
+    body?.data?.id,
+    body?.id,
+    body?.submissionId,
+    body?.submission_id,
+  ]
+    .filter(Boolean)
+    .map(String);
 
-  if (!submissionId) {
-    console.error("TALLY BODY:", JSON.stringify(body, null, 2));
+  console.log("TALLY CANDIDATES:", candidates);
+  console.log("TALLY BODY:", JSON.stringify(body, null, 2));
+
+  if (candidates.length === 0) {
     return res.status(400).json({ ok: false, error: "Missing submission id" });
   }
 
-  // 1) Create insigne
+  // Create insigne
   const { data: insigne, error: insigneErr } = await supabase
     .from("insignes")
     .insert({ status: "draft" })
@@ -50,13 +57,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ ok: false, error: insigneErr?.message });
   }
 
-  // 2) Store lookup
+  // Insert lookup rows for ALL candidate ids (so redirect id will match one)
+  const rows = candidates.map((sid) => ({
+    submission_id: sid,
+    insigne_id: insigne.id,
+  }));
+
   const { error: lookupErr } = await supabase
     .from("submission_lookup")
-    .upsert(
-      { submission_id: String(submissionId), insigne_id: insigne.id },
-      { onConflict: "submission_id" }
-    );
+    .upsert(rows, { onConflict: "submission_id" });
 
   if (lookupErr) {
     return res.status(500).json({ ok: false, error: lookupErr.message });
@@ -64,7 +73,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   return res.status(200).json({
     ok: true,
-    submission_id: submissionId,
+    stored_submission_ids: candidates,
     insigne_id: insigne.id,
   });
 }
