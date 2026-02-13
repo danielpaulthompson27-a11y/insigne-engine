@@ -10,7 +10,7 @@ function setCors(res: VercelResponse) {
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   setCors(res);
   if (req.method === "OPTIONS") return res.status(204).end();
-  if (req.method !== "POST") return res.status(405).json({ ok: false });
+  if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Method not allowed" });
 
   const supabase = createClient(
     process.env.SUPABASE_URL!,
@@ -22,31 +22,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     typeof req.body === "object"
       ? req.body
       : (() => {
-          try { return JSON.parse(req.body as any); }
-          catch { return null; }
+          try {
+            return JSON.parse(req.body as any);
+          } catch {
+            return null;
+          }
         })();
 
-  // Collect candidates (Tally varies by event type)
-  const candidates = [
-    body?.submission?.id,
-    body?.data?.submission?.id,
-    body?.event?.data?.id,
-    body?.data?.id,
-    body?.id,
-    body?.submissionId,
-    body?.submission_id,
-  ]
-    .filter(Boolean)
-    .map(String);
+  // ✅ Tally webhook format (from your screenshot)
+  const submissionId = body?.data?.submissionId;
 
-  console.log("TALLY CANDIDATES:", candidates);
+  console.log("TALLY submissionId:", submissionId);
   console.log("TALLY BODY:", JSON.stringify(body, null, 2));
 
-  if (candidates.length === 0) {
-    return res.status(400).json({ ok: false, error: "Missing submission id" });
+  if (!submissionId) {
+    return res.status(400).json({ ok: false, error: "Missing submissionId (body.data.submissionId)" });
   }
 
-  // Create insigne
+  // 1) Create Insigne
   const { data: insigne, error: insigneErr } = await supabase
     .from("insignes")
     .insert({ status: "draft" })
@@ -54,26 +47,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     .single();
 
   if (insigneErr || !insigne) {
-    return res.status(500).json({ ok: false, error: insigneErr?.message });
+    return res.status(500).json({ ok: false, error: insigneErr?.message ?? "Failed to create insigne" });
   }
 
-  // Insert lookup rows for ALL candidate ids (so redirect id will match one)
-  const rows = candidates.map((sid) => ({
-    submission_id: sid,
-    insigne_id: insigne.id,
-  }));
-
-  const { error: lookupErr } = await supabase
-    .from("submission_lookup")
-    .upsert(rows, { onConflict: "submission_id" });
+  // 2) Store lookup (submissionId -> insigneId)
+  const { error: lookupErr } = await supabase.from("submission_lookup").upsert(
+    {
+      submission_id: String(submissionId),
+      insigne_id: insigne.id,
+    },
+    { onConflict: "submission_id" }
+  );
 
   if (lookupErr) {
     return res.status(500).json({ ok: false, error: lookupErr.message });
   }
 
-  return res.status(200).json({
-    ok: true,
-    stored_submission_ids: candidates,
-    insigne_id: insigne.id,
-  });
+  return res.status(200).json({ ok: true, submission_id: submissionId, insigne_id: insigne.id });
 }
