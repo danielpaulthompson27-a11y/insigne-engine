@@ -10,83 +10,55 @@ function json(res: VercelResponse, status: number, body: any) {
   res.end(JSON.stringify(body));
 }
 
-function findFieldValue(body: any, key: string): string | null {
-  // Tally payloads vary — this searches common shapes safely
-  const candidates =
-    body?.data?.fields ||
-    body?.fields ||
-    body?.data?.data?.fields ||
-    body?.data?.submission?.fields ||
-    [];
-
-  if (!Array.isArray(candidates)) return null;
-
-  for (const f of candidates) {
-    if (!f) continue;
-    if (f.key === key) return f.value ?? null;
-    if (f.name === key) return f.value ?? null;
-    if (f.label === key) return f.value ?? null;
-  }
-  return null;
-}
-
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method === "OPTIONS") return res.status(204).end();
-  if (req.method !== "POST") return json(res, 405, { ok: false, error: "Method not allowed" });
+  try {
+    if (req.method === "OPTIONS") return res.status(204).end();
+    if (req.method !== "POST") return json(res, 405, { ok: false, error: "Method not allowed" });
 
-  const SUPABASE_URL = process.env.SUPABASE_URL!;
-  const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+    const SUPABASE_URL = process.env.SUPABASE_URL;
+    const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  const raw = req.body as any;
-  const body = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+      return json(res, 500, { ok: false, error: "Missing Supabase env vars" });
+    }
 
-  // ✅ Use the hidden field value first (this is the Webflow-generated sid)
-  const submissionId =
-    findFieldValue(body, "submission_id") ||
-    body?.submission?.id ||
-    body?.data?.submission?.id ||
-    null;
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { persistSession: false },
+    });
 
-  if (!submissionId) {
-    return json(res, 400, { ok: false, error: "Missing submission id", receivedKeys: Object.keys(body || {}) });
+    // Tally sometimes sends JSON, sometimes a string
+    const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+
+    // Be flexible: different Tally payload shapes
+    const submissionId =
+      body?.submission?.id ||
+      body?.data?.submissionId ||
+      body?.submissionId ||
+      null;
+
+    // Create an insigne no matter what, so you can see flow working
+    const { data: insigne, error: insigneErr } = await supabase
+      .from("insignes")
+      .insert({
+        status: "draft",
+        motto_latin: "omnia cum moderatione",
+        report_text: "TEST: This is your report. You value integrity, precision, and relentless growth...",
+      })
+      .select("id")
+      .single();
+
+    if (insigneErr) return json(res, 500, { ok: false, error: insigneErr.message });
+
+    // If we DID get a submissionId, store it (optional)
+    if (submissionId) {
+      await supabase.from("submission_lookup").insert({
+        submission_id: submissionId,
+        insigne_id: insigne.id,
+      });
+    }
+
+    return json(res, 200, { ok: true, insigne_id: insigne.id, submission_id: submissionId });
+  } catch (e: any) {
+    return json(res, 500, { ok: false, error: "Unexpected error", details: e?.message ?? e });
   }
-
-  // ✅ Dedup: if already exists, return existing mapping
-  const { data: existing } = await supabase
-    .from("submission_lookup")
-    .select("submission_id, insigne_id")
-    .eq("submission_id", submissionId)
-    .maybeSingle();
-
-  if (existing?.insigne_id) {
-    return json(res, 200, { ok: true, submission_id: submissionId, insigne_id: existing.insigne_id, deduped: true });
-  }
-
-  // 1) Create Insigne (and a placeholder report so results page shows content)
-  const { data: insigne, error: insigneErr } = await supabase
-    .from("insignes")
-    .insert({
-      status: "draft",
-      report_text: "Your Insigne is being forged. This is your initial profile preview.",
-      motto_latin: "",
-    })
-    .select("id")
-    .single();
-
-  if (insigneErr || !insigne?.id) {
-    return json(res, 500, { ok: false, error: "Failed to create insigne", details: insigneErr });
-  }
-
-  // 2) Store lookup
-  const { error: lookupErr } = await supabase.from("submission_lookup").insert({
-    submission_id: submissionId,
-    insigne_id: insigne.id,
-  });
-
-  if (lookupErr) {
-    return json(res, 500, { ok: false, error: "Failed to store submission lookup", details: lookupErr });
-  }
-
-  return json(res, 200, { ok: true, submission_id: submissionId, insigne_id: insigne.id });
 }
